@@ -29,6 +29,9 @@ class ImageCompressorOptions {
   final int? maxWidth;
   final int? maxHeight;
   final CompressFormat format;
+
+  /// EXIF 信息：默认情况下，压缩后的图片不会保留原始图片的 EXIF 信息（如拍摄参数、GPS 位置等）。
+  /// 如果需要保留，可以将 keepExif 参数设为 true，但请注意此选项仅对 JPG 格式有效，且不会保留方向信息
   final bool keepExif;
 
   const ImageCompressorOptions({
@@ -39,7 +42,7 @@ class ImageCompressorOptions {
     this.maxWidth,
     this.maxHeight,
     this.format = CompressFormat.jpeg,
-    this.keepExif = true,
+    this.keepExif = false,
   }) : assert(targetSizeInKB > 0),
        assert(initialQuality <= 100 && initialQuality > 0),
        assert(minQuality > 0 && minQuality <= initialQuality),
@@ -64,6 +67,46 @@ class ImageCompressorService {
     if (originalBytes <= targetBytes) {
       final File copied = await _copyToTemp(sourceFile);
       return ImageCompressorResult(file: copied, bytes: originalBytes, qualityUsed: 100, sizeInfo: const SizeInfo());
+    }
+
+    // Native fast path (Android/iOS): quick binary search on quality only without resizing
+    final Map<String, dynamic>? native = await _nativeFastQualitySearch(
+      sourceFile.path,
+      safeTargetBytes,
+      options.initialQuality,
+      options.minQuality,
+      options.format,
+      options.keepExif,
+    );
+    if (native != null) {
+      final Uint8List outBytes = native['bytes'] as Uint8List;
+      final int quality = native['quality'] as int;
+      final File outFile = await _writeBytesToTemp(outBytes);
+      return ImageCompressorResult(
+        file: outFile,
+        bytes: outBytes.length,
+        qualityUsed: quality,
+        sizeInfo: const SizeInfo(),
+      );
+    }
+
+    // Fast path: run adaptive search entirely inside one isolate with single decode and in-memory trials.
+    final Map<String, dynamic>? fast = await _adaptiveSearchInIsolate(
+      sourceFile.path,
+      safeTargetBytes,
+      options.initialQuality,
+      options.minQuality,
+    );
+    if (fast != null) {
+      final Uint8List outBytes = fast['bytes'] as Uint8List;
+      final int quality = fast['quality'] as int;
+      final File outFile = await _writeBytesToTemp(outBytes);
+      return ImageCompressorResult(
+        file: outFile,
+        bytes: outBytes.length,
+        qualityUsed: quality,
+        sizeInfo: const SizeInfo(),
+      );
     }
 
     // Use pure-Dart fallback path (image package) with resize candidates.
@@ -351,6 +394,317 @@ class ImageCompressorService {
     } catch (_) {
       return null;
     }
+  }
+
+  // In-memory encode to temp file helper
+  static Future<File> _writeBytesToTemp(Uint8List bytes) async {
+    final Directory tempDir = await getTemporaryDirectory();
+    final String targetPath = '${tempDir.path}/fic_mem_${DateTime.now().microsecondsSinceEpoch}.jpg';
+    final File f = File(targetPath);
+    await f.writeAsBytes(bytes);
+    return f;
+  }
+
+  // Native fast path: try platform codec for quick quality-only search (no resize).
+  // Returns bytes and quality if a <= target result is found.
+  static Future<Map<String, dynamic>?> _nativeFastQualitySearch(
+    String sourcePath,
+    int targetBytes,
+    int initialQuality,
+    int minQuality,
+    CompressFormat format,
+    bool keepExif,
+  ) async {
+    // Only run on mobile platforms with flutter_image_compress backing
+    try {
+      int low = minQuality;
+      int high = initialQuality;
+      int attempts = 0;
+      const int maxAttempts = 6; // small cap
+      Uint8List? best;
+      int? bestSize;
+      int bestQuality = initialQuality;
+
+      while (low <= high && attempts < maxAttempts) {
+        final int mid = (low + high) >> 1;
+        final Uint8List? bytes = await FlutterImageCompress.compressWithFile(
+          sourcePath,
+          quality: mid,
+          format: format,
+          keepExif: keepExif,
+        );
+        attempts++;
+        if (bytes == null) break;
+        final int size = bytes.lengthInBytes;
+        if (size <= targetBytes) {
+          if (bestSize == null || size > bestSize) {
+            best = bytes;
+            bestSize = size;
+            bestQuality = mid;
+          }
+          low = mid + 1;
+        } else {
+          high = mid - 1;
+        }
+      }
+
+      if (best != null) {
+        return <String, dynamic>{'bytes': best, 'quality': bestQuality};
+      }
+    } catch (_) {
+      // ignore and fall back
+    }
+    return null;
+  }
+
+  // Single-decode adaptive search in isolate: returns nearest-under-target jpeg bytes and quality.
+  static Future<Map<String, dynamic>?> _adaptiveSearchInIsolate(
+    String sourcePath,
+    int targetBytes,
+    int initialQuality,
+    int minQuality,
+  ) async {
+    return Isolate.run<Map<String, dynamic>?>(() {
+      try {
+        final Uint8List data = File(sourcePath).readAsBytesSync();
+        final img.Image? decoded = img.decodeImage(data);
+        if (decoded == null) return null;
+
+        // ---------- Fast two-probe estimation (no resize) ----------
+        Uint8List encode(img.Image im, int q) => Uint8List.fromList(img.encodeJpg(im, quality: q));
+
+        // Two probes at quality 85 and 35 to estimate q* ~ f(size)
+        final Uint8List probeHi = encode(decoded, 85);
+        final int sHi = probeHi.lengthInBytes;
+        final Uint8List probeLo = encode(decoded, 35);
+        final int sLo = probeLo.lengthInBytes;
+
+        final int dq = 85 - 35; // 50
+        final int ds = sHi - sLo;
+        if (dq != 0) {
+          final double a = ds / dq; // slope ~ bytes per quality
+          final double b = sLo - a * 35.0;
+          if (a.abs() > 1e-6) {
+            int qStar = ((targetBytes - b) / a).round();
+            if (qStar > 100) qStar = 100;
+            if (qStar < 10) qStar = 10;
+
+            if (qStar >= minQuality) {
+              // try qStar, then a tiny adjust up/down within 2 steps
+              int bestSizeLocal = 0;
+              Uint8List? bestLocal;
+              int bestQ = qStar;
+              for (final int q in <int>[qStar, qStar + 5, qStar - 5]) {
+                if (q < minQuality || q > 100) continue;
+                final Uint8List out = encode(decoded, q);
+                final int size = out.lengthInBytes;
+                if (size <= targetBytes && size > bestSizeLocal) {
+                  bestSizeLocal = size;
+                  bestLocal = out;
+                  bestQ = q;
+                }
+                // early break if close enough (<= target & >= 90% target)
+                if (bestSizeLocal >= (targetBytes * 0.90).floor()) {
+                  break;
+                }
+              }
+              if (bestLocal != null) {
+                return <String, dynamic>{'bytes': bestLocal, 'quality': bestQ};
+              }
+            }
+          }
+        }
+
+        // ---------- Predict need to downscale if required quality would be too low ----------
+        // If even at q=35 size >> target, predict a scale to target with q around 75
+        if (sLo > targetBytes && minQuality > 10) {
+          // approximate size at q=75 using linear model; fallback to mid of probes if degenerate
+          final double a2 = (sHi - sLo) / dq;
+          final double b2 = sLo - a2 * 35.0;
+          int s75 = (a2.abs() > 1e-6 ? (a2 * 75.0 + b2).round() : ((sHi + sLo) >> 1));
+          if (s75 <= 0) s75 = sLo; // guard
+          // scale factor for bytes ~ pixels; so pixels scale ~ bytes scale; dimension scale ~ sqrt(bytes scale)
+          final double byteScale = targetBytes / s75;
+          double dimScale = byteScale > 0 ? _sqrt(byteScale) : 1.0;
+          if (dimScale < 0.1) dimScale = 0.1; // avoid over-shrink
+
+          final int w0 = decoded.width;
+          final int h0 = decoded.height;
+          final int maxSide0 = w0 > h0 ? w0 : h0;
+          final int newMaxSide = (maxSide0 * dimScale).floor();
+          if (newMaxSide > 0 && newMaxSide < maxSide0) {
+            img.Image image2 = decoded;
+            final double scale = w0 > h0 ? newMaxSide / w0 : newMaxSide / h0;
+            final int nw = (w0 * scale).floor();
+            final int nh = (h0 * scale).floor();
+            image2 = img.copyResize(image2, width: nw, height: nh, interpolation: img.Interpolation.linear);
+
+            // Re-probe around q=75 and 50 to refine
+            final Uint8List pHi2 = encode(image2, 80);
+            final int sHi2 = pHi2.lengthInBytes;
+            final Uint8List pLo2 = encode(image2, 50);
+            final int sLo2 = pLo2.lengthInBytes;
+            final int dq2 = 30;
+            final int ds2 = sHi2 - sLo2;
+            if (dq2 != 0) {
+              final double a3 = ds2 / dq2;
+              final double b3 = sLo2 - a3 * 50.0;
+              if (a3.abs() > 1e-6) {
+                int qStar2 = ((targetBytes - b3) / a3).round();
+                if (qStar2 > 100) qStar2 = 100;
+                if (qStar2 < 10) qStar2 = 10;
+                int bestSize2 = 0;
+                Uint8List? best2;
+                int bestQ2 = qStar2;
+                for (final int q in <int>[qStar2, qStar2 + 5, qStar2 - 5]) {
+                  if (q < 10 || q > 100) continue;
+                  final Uint8List out = encode(image2, q);
+                  final int size = out.lengthInBytes;
+                  if (size <= targetBytes && size > bestSize2) {
+                    bestSize2 = size;
+                    best2 = out;
+                    bestQ2 = q;
+                  }
+                  if (bestSize2 >= (targetBytes * 0.90).floor()) {
+                    break;
+                  }
+                }
+                if (best2 != null) {
+                  return <String, dynamic>{'bytes': best2, 'quality': bestQ2};
+                }
+              }
+            }
+          }
+        }
+
+        final List<int> dims = <int>[0, 2048, 1600, 1280, 1024, 800, 640, 480, 360, 320, 256];
+        Uint8List? bestBytes; // <= target
+        int? bestSize;
+        int bestQuality = initialQuality;
+
+        Uint8List? smallestBytes; // overall smallest
+        int? smallestSize;
+
+        for (final int dim in dims) {
+          img.Image image = decoded;
+          if (dim > 0) {
+            final int w = image.width;
+            final int h = image.height;
+            final int maxSide = dim;
+            final double scale = w > h ? maxSide / w : maxSide / h;
+            if (scale < 1.0) {
+              final int nw = (w * scale).floor();
+              final int nh = (h * scale).floor();
+              image = img.copyResize(image, width: nw, height: nh, interpolation: img.Interpolation.linear);
+            }
+          }
+
+          int low = minQuality;
+          int high = initialQuality;
+          int attempts = 0;
+          const int maxAttemptsPerDim = 8;
+          while (low <= high && attempts < maxAttemptsPerDim) {
+            final int mid = (low + high) >> 1;
+            final Uint8List out = Uint8List.fromList(img.encodeJpg(image, quality: mid));
+            final int size = out.lengthInBytes;
+            attempts++;
+
+            if (smallestSize == null || size < smallestSize) {
+              smallestBytes = out;
+              smallestSize = size;
+            }
+
+            if (size <= targetBytes) {
+              if (bestSize == null || size > bestSize) {
+                bestBytes = out;
+                bestSize = size;
+                bestQuality = mid;
+              }
+              low = mid + 1;
+            } else {
+              high = mid - 1;
+            }
+          }
+
+          // early exit when already close enough (within 5%)
+          if (bestSize != null && bestSize >= (targetBytes * 0.90).floor()) {
+            break;
+          }
+        }
+
+        if (bestBytes != null) {
+          return <String, dynamic>{'bytes': bestBytes, 'quality': bestQuality};
+        }
+
+        // fallback lower bound try with quality down to 10
+        if (smallestBytes != null && smallestSize != null && smallestSize > targetBytes && minQuality > 10) {
+          final List<int> dims2 = <int>[360, 320, 256, 224, 200, 180, 160, 128];
+          for (final int dim in dims2) {
+            img.Image image = decoded;
+            if (dim > 0) {
+              final int w = image.width;
+              final int h = image.height;
+              final int maxSide = dim;
+              final double scale = w > h ? maxSide / w : maxSide / h;
+              if (scale < 1.0) {
+                final int nw = (w * scale).floor();
+                final int nh = (h * scale).floor();
+                image = img.copyResize(image, width: nw, height: nh, interpolation: img.Interpolation.linear);
+              }
+            }
+            int low = 10;
+            int high = initialQuality;
+            for (int i = 0; i < 6 && low <= high; i++) {
+              final int mid = (low + high) >> 1;
+              final Uint8List out = Uint8List.fromList(img.encodeJpg(image, quality: mid));
+              final int size = out.lengthInBytes;
+              if (size <= targetBytes) {
+                return <String, dynamic>{'bytes': out, 'quality': mid};
+              }
+              high = mid - 1;
+            }
+          }
+        }
+
+        // final enforcement: quality=1 sweep
+        final List<int> dims3 = <int>[640, 480, 360, 320, 256, 224, 200, 180, 160, 128, 112, 96, 80];
+        for (final int dim in dims3) {
+          img.Image image = decoded;
+          if (dim > 0) {
+            final int w = image.width;
+            final int h = image.height;
+            final int maxSide = dim;
+            final double scale = w > h ? maxSide / w : maxSide / h;
+            if (scale < 1.0) {
+              final int nw = (w * scale).floor();
+              final int nh = (h * scale).floor();
+              image = img.copyResize(image, width: nw, height: nh, interpolation: img.Interpolation.linear);
+            }
+          }
+          final Uint8List out = Uint8List.fromList(img.encodeJpg(image, quality: 1));
+          if (out.lengthInBytes <= targetBytes) {
+            return <String, dynamic>{'bytes': out, 'quality': 1};
+          }
+        }
+
+        return null;
+      } catch (_) {
+        return null;
+      }
+    });
+  }
+
+  // lightweight sqrt wrapper for double
+  static double _sqrt(double x) {
+    double r = x;
+    if (x <= 0) return 0;
+    // Newton-Raphson 3 iterations (enough for our scaling purpose)
+    double g = x;
+    for (int i = 0; i < 3; i++) {
+      g = 0.5 * (g + x / g);
+    }
+    r = g;
+    return r;
   }
 
   static Future<File> _copyToTemp(File file) async {

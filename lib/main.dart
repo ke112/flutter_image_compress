@@ -67,7 +67,7 @@ class _MyHomePageState extends State<MyHomePage> {
   int? _compressedBytes;
   bool _uploading = false;
   bool _includeOriginal = true;
-  int _targetKB = 200;
+  int _targetKB = 800;
   int? _qualityUsed;
   final ImageUploaderService _uploader = ImageUploaderService();
   int? _compressDurationMs;
@@ -216,7 +216,7 @@ class _MyHomePageState extends State<MyHomePage> {
       maxWidth: 3000,
       maxHeight: 3000,
       format: CompressFormat.jpeg,
-      keepExif: true,
+      keepExif: false,
     );
     final Stopwatch sw = Stopwatch()..start();
     final res = await ImageCompressorService.compressToTarget(_originalFile!, options: opts);
@@ -340,12 +340,15 @@ class _TargetSizeField extends StatefulWidget {
 class _TargetSizeFieldState extends State<_TargetSizeField> {
   late final TextEditingController _controller;
   bool _programmaticUpdate = false;
+  late final FocusNode _focusNode;
 
   @override
   void initState() {
     super.initState();
     _controller = TextEditingController(text: widget.value.toString());
     _controller.addListener(_onTextChanged);
+    _focusNode = FocusNode();
+    _focusNode.addListener(_onFocusChange);
   }
 
   @override
@@ -353,7 +356,8 @@ class _TargetSizeFieldState extends State<_TargetSizeField> {
     super.didUpdateWidget(oldWidget);
     final String currentText = _controller.text;
     final String newText = widget.value.toString();
-    if (currentText != newText) {
+    // Only sync from outside when not focused, to avoid overriding user typing
+    if (!_focusNode.hasFocus && currentText != newText) {
       _programmaticUpdate = true;
       _controller.value = _controller.value.copyWith(
         text: newText,
@@ -373,10 +377,31 @@ class _TargetSizeFieldState extends State<_TargetSizeField> {
     }
   }
 
+  void _onFocusChange() {
+    if (_focusNode.hasFocus) return;
+    // On blur: commit valid value or restore to last good external value
+    final String text = _controller.text;
+    final int? v = int.tryParse(text);
+    if (v != null && v > 0) {
+      widget.onChanged(v);
+    } else {
+      final String fallback = widget.value.toString();
+      _programmaticUpdate = true;
+      _controller.value = _controller.value.copyWith(
+        text: fallback,
+        selection: TextSelection.collapsed(offset: fallback.length),
+        composing: TextRange.empty,
+      );
+      _programmaticUpdate = false;
+    }
+  }
+
   @override
   void dispose() {
     _controller.removeListener(_onTextChanged);
     _controller.dispose();
+    _focusNode.removeListener(_onFocusChange);
+    _focusNode.dispose();
     super.dispose();
   }
 
@@ -384,6 +409,7 @@ class _TargetSizeFieldState extends State<_TargetSizeField> {
   Widget build(BuildContext context) {
     return TextField(
       controller: _controller,
+      focusNode: _focusNode,
       keyboardType: TextInputType.number,
       inputFormatters: <TextInputFormatter>[FilteringTextInputFormatter.digitsOnly],
       decoration: InputDecoration(
