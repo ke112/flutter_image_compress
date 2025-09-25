@@ -68,7 +68,25 @@ class ImageCompressorService {
 
     // Use pure-Dart fallback path (image package) with resize candidates.
     // Prefer no-resize first so we can aim for the highest possible quality near the target size.
-    final List<int> dimensionCandidates = <int>[0, 3000, 2048, 1600, 1280, 1024, 800, 640, 480];
+    final List<int> dimensionCandidates = <int>[
+      0,
+      3000,
+      2048,
+      1600,
+      1280,
+      1024,
+      800,
+      640,
+      480,
+      360,
+      320,
+      256,
+      224,
+      200,
+      180,
+      160,
+      128,
+    ];
 
     File? globalBestFile; // <= target
     int? globalBestBytes;
@@ -79,7 +97,7 @@ class ImageCompressorService {
     int globalSmallestQuality = options.initialQuality;
 
     final List<File> garbageTrials = <File>[]; // temporary files to clean up
-    const int maxTotalTrials = 12; // tighter safety cap to avoid memory spikes
+    const int maxTotalTrials = 60; // allow more trials to reach stricter targets reliably
     int totalTrials = 0;
 
     for (final int dim in dimensionCandidates) {
@@ -165,6 +183,69 @@ class ImageCompressorService {
       }
     }
 
+    // Fallback: if nothing under target was found and we still exceed the target,
+    // try again with smaller dimensions and lower min quality bound (down to 10).
+    if (globalBestBytes == null &&
+        globalSmallestBytes != null &&
+        globalSmallestBytes > safeTargetBytes &&
+        options.minQuality > 10) {
+      final List<int> fallbackDims = <int>[360, 320, 256, 224, 200, 180, 160, 128];
+      int fallbackTrials = 0;
+      const int maxFallbackTrials = 40;
+      for (final int dim in fallbackDims) {
+        int low = 10;
+        int high = options.initialQuality;
+        while (low <= high) {
+          if (fallbackTrials >= maxFallbackTrials) {
+            break;
+          }
+          final int mid = (low + high) >> 1;
+          File? trial;
+          try {
+            trial = await _compressWithDart(sourcePath: sourceFile.path, quality: mid, maxDim: dim);
+          } catch (_) {
+            trial = null;
+          }
+          if (trial == null) {
+            break;
+          }
+          final int trialBytes = await trial.length();
+          fallbackTrials++;
+
+          // Track global smallest as well
+          if (globalSmallestBytes == null || trialBytes < globalSmallestBytes) {
+            if (globalSmallestFile != null && globalSmallestFile.path != trial.path) {
+              garbageTrials.add(globalSmallestFile);
+            }
+            globalSmallestFile = trial;
+            globalSmallestBytes = trialBytes;
+            globalSmallestQuality = mid;
+          } else {
+            garbageTrials.add(trial);
+          }
+
+          if (trialBytes <= safeTargetBytes) {
+            if (globalBestBytes == null || trialBytes > globalBestBytes) {
+              if (globalBestFile != null && globalBestFile.path != trial.path) {
+                garbageTrials.add(globalBestFile);
+              }
+              globalBestFile = trial;
+              globalBestBytes = trialBytes;
+              globalBestQuality = mid;
+            }
+            // try raising quality while staying under target
+            low = mid + 1;
+          } else {
+            high = mid - 1;
+          }
+        }
+
+        if (globalBestBytes != null && globalBestBytes <= safeTargetBytes) {
+          break;
+        }
+      }
+    }
+
     // Decide final output
     File chosenFile;
     int chosenBytes;
@@ -183,6 +264,30 @@ class ImageCompressorService {
       chosenFile = sourceFile;
       chosenBytes = originalBytes;
       chosenQuality = 100;
+    }
+
+    // Final enforcement: if still above target, force shrink with quality=1 and progressively smaller dims
+    if (chosenBytes > safeTargetBytes) {
+      final List<int> enforcementDims = <int>[640, 480, 360, 320, 256, 224, 200, 180, 160, 128, 112, 96, 80];
+      for (final int dim in enforcementDims) {
+        File? trial;
+        try {
+          trial = await _compressWithDart(sourcePath: sourceFile.path, quality: 1, maxDim: dim);
+        } catch (_) {
+          trial = null;
+        }
+        if (trial == null) continue;
+        final int trialBytes = await trial.length();
+        if (trialBytes <= safeTargetBytes) {
+          garbageTrials.add(chosenFile);
+          chosenFile = trial;
+          chosenBytes = trialBytes;
+          chosenQuality = 1;
+          break;
+        } else {
+          garbageTrials.add(trial);
+        }
+      }
     }
 
     // Cleanup unused temp files
