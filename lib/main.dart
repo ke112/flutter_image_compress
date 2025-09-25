@@ -8,6 +8,7 @@ import 'package:image_picker/image_picker.dart';
 
 import 'services/image_compressor.dart';
 import 'services/uploader.dart';
+import 'widgets/image_compare_viewer.dart';
 
 void main() {
   runApp(const MyApp());
@@ -81,7 +82,7 @@ class _MyHomePageState extends State<MyHomePage> {
       body: GestureDetector(
         behavior: HitTestBehavior.translucent,
         onTap: () async {
-          SystemChannels.textInput.invokeMethod('TextInput.hide');
+          hiddenKeyboard();
         },
         child: SingleChildScrollView(
           padding: pagePadding,
@@ -92,18 +93,29 @@ class _MyHomePageState extends State<MyHomePage> {
                 textDirection: dir,
                 children: [
                   Expanded(
+                    flex: 4,
                     child: ElevatedButton.icon(
                       onPressed: _onPick,
-                      icon: const Icon(Icons.photo_library),
-                      label: const Text('选择图片'),
+                      icon: const Icon(Icons.photo_library, size: 12),
+                      label: const Text('选择图片', style: TextStyle(fontSize: 10)),
                     ),
                   ),
                   const SizedBox(width: 12),
                   Expanded(
+                    flex: 3,
+                    child: ElevatedButton.icon(
+                      onPressed: _onCapture,
+                      icon: const Icon(Icons.photo_camera, size: 12),
+                      label: const Text('拍照', style: TextStyle(fontSize: 10)),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    flex: 4,
                     child: ElevatedButton.icon(
                       onPressed: _originalFile != null ? _onCompress : null,
-                      icon: const Icon(Icons.compress),
-                      label: const Text('压缩到目标'),
+                      icon: const Icon(Icons.compress, size: 12),
+                      label: const Text('压缩到目标', style: TextStyle(fontSize: 10)),
                     ),
                   ),
                 ],
@@ -173,19 +185,39 @@ class _MyHomePageState extends State<MyHomePage> {
     );
   }
 
+  void hiddenKeyboard() {
+    SystemChannels.textInput.invokeMethod('TextInput.hide');
+  }
+
   Widget _buildPreviewCard(BuildContext context, {required File file, int? bytes, required String title}) {
     final int size = bytes ?? file.lengthSync();
     final double kb = size / 1024.0;
+    final bool isOriginal = title.contains('原图');
     return Card(
-      child: Padding(
-        padding: const EdgeInsetsDirectional.fromSTEB(12, 12, 12, 12),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text('$title  •  ${kb.toStringAsFixed(1)} KB'),
-            const SizedBox(height: 8),
-            Image.file(file, height: 220, fit: BoxFit.contain),
-          ],
+      child: InkWell(
+        onTap: () {
+          Navigator.of(context).push(
+            MaterialPageRoute<void>(
+              builder:
+                  (BuildContext ctx) => ImageCompareViewerPage(
+                    originalFile: _originalFile,
+                    compressedFile: _compressedFile,
+                    initialPreferredTab: isOriginal ? 'original' : 'compressed',
+                  ),
+              fullscreenDialog: true,
+            ),
+          );
+        },
+        child: Padding(
+          padding: const EdgeInsetsDirectional.fromSTEB(12, 12, 12, 12),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('$title  •  ${kb.toStringAsFixed(1)} KB'),
+              const SizedBox(height: 8),
+              Image.file(file, height: 220, fit: BoxFit.contain),
+            ],
+          ),
         ),
       ),
     );
@@ -206,7 +238,24 @@ class _MyHomePageState extends State<MyHomePage> {
     });
   }
 
+  Future<void> _onCapture() async {
+    hiddenKeyboard();
+    final XFile? captured = await _picker.pickImage(source: ImageSource.camera);
+    if (captured == null) return;
+    final File f = File(captured.path);
+    final int b = await f.length();
+    setState(() {
+      _originalFile = f;
+      _originalBytes = b;
+      _compressedFile = null;
+      _compressedBytes = null;
+      _qualityUsed = null;
+      _compressDurationMs = null;
+    });
+  }
+
   Future<void> _onCompress() async {
+    hiddenKeyboard();
     if (_originalFile == null) return;
     final opts = ImageCompressorOptions(
       targetSizeInKB: _targetKB,
