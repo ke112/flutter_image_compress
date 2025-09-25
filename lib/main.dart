@@ -327,28 +327,71 @@ class _MyHomePageState extends State<MyHomePage> {
   }
 }
 
-class _TargetSizeField extends StatelessWidget {
+class _TargetSizeField extends StatefulWidget {
   final int value;
   final ValueChanged<int> onChanged;
   final String label;
   const _TargetSizeField({required this.value, required this.onChanged, required this.label});
 
   @override
+  State<_TargetSizeField> createState() => _TargetSizeFieldState();
+}
+
+class _TargetSizeFieldState extends State<_TargetSizeField> {
+  late final TextEditingController _controller;
+  bool _programmaticUpdate = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = TextEditingController(text: widget.value.toString());
+    _controller.addListener(_onTextChanged);
+  }
+
+  @override
+  void didUpdateWidget(covariant _TargetSizeField oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final String currentText = _controller.text;
+    final String newText = widget.value.toString();
+    if (currentText != newText) {
+      _programmaticUpdate = true;
+      _controller.value = _controller.value.copyWith(
+        text: newText,
+        selection: TextSelection.collapsed(offset: newText.length),
+        composing: TextRange.empty,
+      );
+      _programmaticUpdate = false;
+    }
+  }
+
+  void _onTextChanged() {
+    if (_programmaticUpdate) return;
+    final String text = _controller.text;
+    final int? v = int.tryParse(text);
+    if (v != null && v > 0) {
+      widget.onChanged(v);
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller.removeListener(_onTextChanged);
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final TextEditingController controller = TextEditingController(text: value.toString());
     return TextField(
-      controller: controller,
+      controller: _controller,
       keyboardType: TextInputType.number,
+      inputFormatters: <TextInputFormatter>[FilteringTextInputFormatter.digitsOnly],
       decoration: InputDecoration(
-        labelText: label,
+        labelText: widget.label,
         prefixIcon: const Icon(Icons.tune),
         contentPadding: const EdgeInsetsDirectional.fromSTEB(12, 12, 12, 12),
         border: const OutlineInputBorder(borderRadius: BorderRadius.all(Radius.circular(8))),
       ),
-      onChanged: (text) {
-        final int? v = int.tryParse(text);
-        if (v != null && v > 0) onChanged(v);
-      },
     );
   }
 }

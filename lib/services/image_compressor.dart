@@ -66,8 +66,9 @@ class ImageCompressorService {
       return ImageCompressorResult(file: copied, bytes: originalBytes, qualityUsed: 100, sizeInfo: const SizeInfo());
     }
 
-    // Use pure-Dart fallback path (image package) with safe resize candidates to avoid native crashes.
-    final List<int> dimensionCandidates = <int>[1280, 1024, 800, 640, 480, 0];
+    // Use pure-Dart fallback path (image package) with resize candidates.
+    // Prefer no-resize first so we can aim for the highest possible quality near the target size.
+    final List<int> dimensionCandidates = <int>[0, 3000, 2048, 1600, 1280, 1024, 800, 640, 480];
 
     File? globalBestFile; // <= target
     int? globalBestBytes;
@@ -85,7 +86,7 @@ class ImageCompressorService {
       int low = options.minQuality;
       int high = options.initialQuality;
 
-      File? localBestFile; // <= target at this dim
+      File? localBestFile; // best candidate under target at this dim (closest to target)
       int? localBestBytes;
       int localBestQuality = options.initialQuality;
 
@@ -123,14 +124,17 @@ class ImageCompressorService {
         }
 
         if (trialBytes <= safeTargetBytes) {
-          // Update local best
-          if (localBestBytes == null || trialBytes < localBestBytes) {
+          // Update local best to the largest bytes under target (closest to target)
+          if (localBestBytes == null || trialBytes > localBestBytes) {
             if (localBestFile != null && localBestFile.path != trial.path) {
               garbageTrials.add(localBestFile);
             }
             localBestFile = trial;
             localBestBytes = trialBytes;
             localBestQuality = mid;
+          } else {
+            // Not keeping this trial, mark for deletion later
+            garbageTrials.add(trial);
           }
           // Try higher quality while staying under target
           low = mid + 1;
@@ -140,9 +144,9 @@ class ImageCompressorService {
         }
       }
 
-      // Promote local best to global best
+      // Promote local best (closest under target in this dim) to global best
       if (localBestFile != null && localBestBytes != null) {
-        if (globalBestBytes == null || localBestBytes < globalBestBytes) {
+        if (globalBestBytes == null || localBestBytes > globalBestBytes) {
           if (globalBestFile != null && globalBestFile.path != localBestFile.path) {
             garbageTrials.add(globalBestFile);
           }
