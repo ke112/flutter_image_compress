@@ -5,12 +5,14 @@
 🚀 The Ultimate Flutter Image Compression Tool
 Simply set a maximum file size, and our smart algorithm instantly delivers images with the smallest size and the highest clarity.
 Perfect for profile uploads, gallery images, or bulk processing—make your app faster, lighter, and more professional.
+✨ Try it once, and you’ll keep coming back to it.
 
 🚀 Flutter 最佳图片压缩利器
 轻松设定图片的最大文件大小，智能算法在瞬间为你输出体积最小、清晰度最高的压缩结果。
 无论是上传头像、相册图片，还是海量批量处理，都能让你的应用更快、更省、更专业。
+✨ 用过一次，你一定会想再次使用它。
 
-## Compression Principles (图片压缩原理)
+## Compression Principles
 
 本项目的图片压缩在“保证尽可能接近且不超过目标大小”的前提下，追求稳定与速度，核心策略如下：
 
@@ -54,3 +56,9 @@ Perfect for profile uploads, gallery images, or bulk processing—make your app 
 
 - 目标体积上限：以 KB（×1024）换算为字节作为阈值；当结果小于或等于目标阈值时即视为命中；
 - 选择策略：在“所有小于或等于目标”的候选中选体积最大者，保证尽可能接近目标且不超过；若无小于等于目标的候选，则选择整体最小者或启用兜底策略。
+
+## 效果展示
+
+<p align="left">
+  <img src="assets/images/demo1.png" width="400">
+</p>
