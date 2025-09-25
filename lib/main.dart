@@ -68,7 +68,7 @@ class _MyHomePageState extends State<MyHomePage> {
   int? _compressedBytes;
   bool _uploading = false;
   bool _includeOriginal = true;
-  int _targetKB = 800;
+  int _targetKB = 500;
   int? _qualityUsed;
   final ImageUploaderService _uploader = ImageUploaderService();
   int? _compressDurationMs;
@@ -215,7 +215,7 @@ class _MyHomePageState extends State<MyHomePage> {
             children: [
               Text('$title  •  ${kb.toStringAsFixed(1)} KB'),
               const SizedBox(height: 8),
-              Image.file(file, height: 220, fit: BoxFit.contain),
+              Image.file(file, height: 150, fit: BoxFit.contain),
             ],
           ),
         ),

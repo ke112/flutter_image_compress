@@ -130,17 +130,17 @@ class _ImageCompareViewerPageState extends State<ImageCompareViewerPage> {
           ),
         ),
         Padding(
-          padding: const EdgeInsetsDirectional.fromSTEB(12, 8, 12, 12),
+          padding: const EdgeInsetsDirectional.fromSTEB(12, 8, 12, 45),
           child: Directionality(
             textDirection: dir,
             child: Row(
               textDirection: dir,
               children: <Widget>[
-                Text(leftLabel),
+                SizedBox(width: 50, child: Text(leftLabel)),
                 const SizedBox(width: 8),
                 Expanded(child: Slider(value: _fraction, onChanged: (double v) => setState(() => _fraction = v))),
                 const SizedBox(width: 8),
-                Text(rightLabel),
+                SizedBox(width: 50, child: Text(rightLabel)),
               ],
             ),
           ),
