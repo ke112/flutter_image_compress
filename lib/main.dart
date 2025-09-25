@@ -276,14 +276,9 @@ class _MyHomePageState extends State<MyHomePage> {
             const SizedBox(height: 6),
             Row(
               textDirection: dir,
-              children: const <Widget>[
-                Icon(Icons.percent, size: 18),
-                SizedBox(width: 8),
-                // Placeholder; replaced by the next Text using ratioText via interpolation below
-              ],
+              children: <Widget>[Icon(Icons.percent, size: 18), SizedBox(width: 8), Text('压缩比例: $ratioText')],
             ),
             // Using separate Text to ensure correct formatting and avoid const issues
-            Padding(padding: const EdgeInsetsDirectional.fromSTEB(26, 0, 0, 0), child: Text('压缩比例: $ratioText')),
             const SizedBox(height: 6),
             Row(
               textDirection: dir,
