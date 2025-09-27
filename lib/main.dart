@@ -2,12 +2,8 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter_image_compress/flutter_image_compress.dart';
-import 'package:flutter_localizations/flutter_localizations.dart';
-import 'package:image_picker/image_picker.dart';
 
-import 'services/image_compressor.dart';
-import 'services/uploader.dart';
+import 'state/app_state.dart';
 import 'widgets/image_compare_viewer.dart';
 
 void main() {
@@ -24,35 +20,12 @@ class MyApp extends StatelessWidget {
       title: 'Image Compress Demo',
       theme: ThemeData(colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple)),
       home: const MyHomePage(title: 'Image Compress Demo'),
-      // Localization delegates for Material/Cupertino/Widgets
-      localizationsDelegates: const <LocalizationsDelegate<dynamic>>[
-        GlobalMaterialLocalizations.delegate,
-        GlobalWidgetsLocalizations.delegate,
-        GlobalCupertinoLocalizations.delegate,
-      ],
-      supportedLocales: const <Locale>[
-        Locale('en'),
-        Locale('ar'),
-        Locale('he'),
-        Locale('fa'),
-        Locale('ur'),
-        Locale('zh'),
-      ],
     );
   }
 }
 
 class MyHomePage extends StatefulWidget {
   const MyHomePage({super.key, required this.title});
-
-  // This widget is the home page of your application. It is stateful, meaning
-  // that it has a State object (defined below) that contains fields that affect
-  // how it looks.
-
-  // This class is the configuration for the state. It holds the values (in this
-  // case the title) provided by the parent (in this case the App widget) and
-  // used by the build method of the State. Fields in a Widget subclass are
-  // always marked "final".
 
   final String title;
 
@@ -61,17 +34,24 @@ class MyHomePage extends StatefulWidget {
 }
 
 class _MyHomePageState extends State<MyHomePage> {
-  final ImagePicker _picker = ImagePicker();
-  File? _originalFile;
-  File? _compressedFile;
-  int? _originalBytes;
-  int? _compressedBytes;
-  bool _uploading = false;
-  bool _includeOriginal = true;
-  int _targetKB = 500;
-  int? _qualityUsed;
-  final ImageUploaderService _uploader = ImageUploaderService();
-  int? _compressDurationMs;
+  late final AppState _state;
+
+  @override
+  void initState() {
+    super.initState();
+    _state = AppState();
+    _state.addListener(_onStateChanged);
+  }
+
+  @override
+  void dispose() {
+    _state.removeListener(_onStateChanged);
+    super.dispose();
+  }
+
+  void _onStateChanged() {
+    if (mounted) setState(() {});
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -81,9 +61,7 @@ class _MyHomePageState extends State<MyHomePage> {
       appBar: AppBar(backgroundColor: Theme.of(context).colorScheme.inversePrimary, title: Text(widget.title)),
       body: GestureDetector(
         behavior: HitTestBehavior.translucent,
-        onTap: () async {
-          hiddenKeyboard();
-        },
+        onTap: () async => _state.hiddenKeyboard(),
         child: SingleChildScrollView(
           padding: pagePadding,
           child: Column(
@@ -95,27 +73,27 @@ class _MyHomePageState extends State<MyHomePage> {
                   Expanded(
                     flex: 4,
                     child: ElevatedButton.icon(
-                      onPressed: _onPick,
+                      onPressed: _state.pickImage,
                       icon: const Icon(Icons.photo_library, size: 12),
-                      label: const Text('选择图片', style: TextStyle(fontSize: 10)),
+                      label: const Text('选择图片', style: TextStyle(fontSize: 12)),
                     ),
                   ),
                   const SizedBox(width: 12),
                   Expanded(
                     flex: 3,
                     child: ElevatedButton.icon(
-                      onPressed: _onCapture,
+                      onPressed: _state.captureImage,
                       icon: const Icon(Icons.photo_camera, size: 12),
-                      label: const Text('拍照', style: TextStyle(fontSize: 10)),
+                      label: const Text('拍照', style: TextStyle(fontSize: 12)),
                     ),
                   ),
                   const SizedBox(width: 12),
                   Expanded(
                     flex: 4,
                     child: ElevatedButton.icon(
-                      onPressed: _originalFile != null ? _onCompress : null,
+                      onPressed: _state.originalFile != null ? _state.compress : null,
                       icon: const Icon(Icons.compress, size: 12),
-                      label: const Text('压缩到目标', style: TextStyle(fontSize: 10)),
+                      label: const Text('压缩到目标', style: TextStyle(fontSize: 12)),
                     ),
                   ),
                 ],
@@ -126,8 +104,8 @@ class _MyHomePageState extends State<MyHomePage> {
                 children: [
                   Expanded(
                     child: _TargetSizeField(
-                      value: _targetKB,
-                      onChanged: (v) => setState(() => _targetKB = v),
+                      value: _state.targetKB,
+                      onChanged: (v) => _state.targetKB = v,
                       label: '目标大小 (KB)',
                     ),
                   ),
@@ -138,32 +116,43 @@ class _MyHomePageState extends State<MyHomePage> {
                       child: SwitchListTile(
                         contentPadding: EdgeInsetsDirectional.zero,
                         title: const Text('展示/上传原图'),
-                        value: _includeOriginal,
-                        onChanged: (v) => setState(() => _includeOriginal = v),
+                        value: _state.includeOriginal,
+                        onChanged: (v) => _state.includeOriginal = v,
                       ),
                     ),
                   ),
                 ],
               ),
               const SizedBox(height: 12),
-              if (_originalFile != null)
-                _buildPreviewCard(context, file: _originalFile!, bytes: _originalBytes, title: '原图'),
+              if (_state.originalFile != null)
+                _buildPreviewCard(context, file: _state.originalFile!, bytes: _state.originalBytes, title: '原图'),
               const SizedBox(height: 12),
-              if (_compressedFile != null)
+              if (_state.compressedFile != null)
                 _buildPreviewCard(
                   context,
-                  file: _compressedFile!,
-                  bytes: _compressedBytes,
-                  title: '压缩图 (质量 $_qualityUsed)',
+                  file: _state.compressedFile!,
+                  bytes: _state.compressedBytes,
+                  title: '压缩图 (质量 ${_state.qualityUsed})',
                 ),
-              if (_compressedFile != null) ...[const SizedBox(height: 12), _buildStatsCard(context)],
+              if (_state.compressedFile != null) ...[const SizedBox(height: 12), _buildStatsCard(context)],
               const SizedBox(height: 20),
               Row(
                 textDirection: dir,
                 children: [
                   Expanded(
                     child: ElevatedButton.icon(
-                      onPressed: !_uploading && _originalFile != null ? () => _onUpload(original: true) : null,
+                      onPressed:
+                          !_state.uploading && _state.originalFile != null
+                              ? () async {
+                                final String? err = await _state.upload(original: true);
+                                if (!mounted) return;
+                                if (err == null) {
+                                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('上传成功')));
+                                } else {
+                                  ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(err)));
+                                }
+                              }
+                              : null,
                       icon: const Icon(Icons.cloud_upload),
                       label: const Text('上传原图'),
                     ),
@@ -171,7 +160,18 @@ class _MyHomePageState extends State<MyHomePage> {
                   const SizedBox(width: 12),
                   Expanded(
                     child: ElevatedButton.icon(
-                      onPressed: !_uploading && _compressedFile != null ? () => _onUpload(original: false) : null,
+                      onPressed:
+                          !_state.uploading && _state.compressedFile != null
+                              ? () async {
+                                final String? err = await _state.upload(original: false);
+                                if (!mounted) return;
+                                if (err == null) {
+                                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('上传成功')));
+                                } else {
+                                  ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(err)));
+                                }
+                              }
+                              : null,
                       icon: const Icon(Icons.cloud_upload_outlined),
                       label: const Text('上传压缩图'),
                     ),
@@ -185,10 +185,6 @@ class _MyHomePageState extends State<MyHomePage> {
     );
   }
 
-  void hiddenKeyboard() {
-    SystemChannels.textInput.invokeMethod('TextInput.hide');
-  }
-
   Widget _buildPreviewCard(BuildContext context, {required File file, int? bytes, required String title}) {
     final int size = bytes ?? file.lengthSync();
     final double kb = size / 1024.0;
@@ -200,8 +196,8 @@ class _MyHomePageState extends State<MyHomePage> {
             MaterialPageRoute<void>(
               builder:
                   (BuildContext ctx) => ImageCompareViewerPage(
-                    originalFile: _originalFile,
-                    compressedFile: _compressedFile,
+                    originalFile: _state.originalFile,
+                    compressedFile: _state.compressedFile,
                     initialPreferredTab: isOriginal ? 'original' : 'compressed',
                   ),
               fullscreenDialog: true,
@@ -216,6 +212,20 @@ class _MyHomePageState extends State<MyHomePage> {
               Text('$title  •  ${kb.toStringAsFixed(1)} KB'),
               const SizedBox(height: 8),
               Image.file(file, height: 150, fit: BoxFit.contain),
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  ElevatedButton.icon(
+                    onPressed: () async {
+                      final bool ok = await _state.saveToGallery(file);
+                      if (!mounted) return;
+                      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(ok ? '已保存到相册' : '保存失败')));
+                    },
+                    icon: const Icon(Icons.download),
+                    label: const Text('保存到相册'),
+                  ),
+                ],
+              ),
             ],
           ),
         ),
@@ -223,68 +233,13 @@ class _MyHomePageState extends State<MyHomePage> {
     );
   }
 
-  Future<void> _onPick() async {
-    final XFile? picked = await _picker.pickImage(source: ImageSource.gallery);
-    if (picked == null) return;
-    final File f = File(picked.path);
-    final int b = await f.length();
-    setState(() {
-      _originalFile = f;
-      _originalBytes = b;
-      _compressedFile = null;
-      _compressedBytes = null;
-      _qualityUsed = null;
-      _compressDurationMs = null;
-    });
-  }
-
-  Future<void> _onCapture() async {
-    hiddenKeyboard();
-    final XFile? captured = await _picker.pickImage(source: ImageSource.camera);
-    if (captured == null) return;
-    final File f = File(captured.path);
-    final int b = await f.length();
-    setState(() {
-      _originalFile = f;
-      _originalBytes = b;
-      _compressedFile = null;
-      _compressedBytes = null;
-      _qualityUsed = null;
-      _compressDurationMs = null;
-    });
-  }
-
-  Future<void> _onCompress() async {
-    hiddenKeyboard();
-    if (_originalFile == null) return;
-    final opts = ImageCompressorOptions(
-      targetSizeInKB: _targetKB,
-      initialQuality: 92,
-      minQuality: 40,
-      step: 4,
-      maxWidth: 3000,
-      maxHeight: 3000,
-      format: CompressFormat.jpeg,
-      keepExif: false,
-    );
-    final Stopwatch sw = Stopwatch()..start();
-    final res = await ImageCompressorService.compressToTarget(_originalFile!, options: opts);
-    sw.stop();
-    setState(() {
-      _compressedFile = res.file;
-      _compressedBytes = res.bytes;
-      _qualityUsed = res.qualityUsed;
-      _compressDurationMs = sw.elapsedMilliseconds;
-    });
-  }
-
   Widget _buildStatsCard(BuildContext context) {
     final TextDirection dir = Directionality.of(context);
-    final int? o = _originalBytes ?? _originalFile?.lengthSync();
-    final int? c = _compressedBytes ?? _compressedFile?.lengthSync();
+    final int? o = _state.originalBytes ?? _state.originalFile?.lengthSync();
+    final int? c = _state.compressedBytes ?? _state.compressedFile?.lengthSync();
     final double? okb = o != null ? o / 1024.0 : null;
     final double? ckb = c != null ? c / 1024.0 : null;
-    final String durationText = _compressDurationMs == null ? '-' : '$_compressDurationMs ms';
+    final String durationText = _state.compressDurationMs == null ? '-' : '${_state.compressDurationMs} ms';
 
     String ratioText = '-';
     if (o != null && c != null && o > 0) {
@@ -350,24 +305,6 @@ class _MyHomePageState extends State<MyHomePage> {
         ),
       ),
     );
-  }
-
-  Future<void> _onUpload({required bool original}) async {
-    final File? file = original ? _originalFile : _compressedFile;
-    if (file == null) return;
-    setState(() => _uploading = true);
-    try {
-      // Replace with your server url
-      final Uri url = Uri.parse('https://httpbin.org/post');
-      await _uploader.uploadFile(url: url, file: file, extraFields: {'original': original.toString()});
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('上传成功')));
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('上传失败: $e')));
-    } finally {
-      if (mounted) setState(() => _uploading = false);
-    }
   }
 }
 
