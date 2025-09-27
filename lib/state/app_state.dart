@@ -2,7 +2,6 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter_image_compress/flutter_image_compress.dart';
 import 'package:image_picker/image_picker.dart';
 
 import '../services/gallery_saver.dart';
@@ -81,16 +80,7 @@ class AppState extends ChangeNotifier {
   Future<void> compress() async {
     hiddenKeyboard();
     if (_originalFile == null) return;
-    final opts = ImageCompressorOptions(
-      targetSizeInKB: _targetKB,
-      initialQuality: 92,
-      minQuality: 40,
-      step: 4,
-      maxWidth: 3000,
-      maxHeight: 3000,
-      format: CompressFormat.jpeg,
-      keepExif: false,
-    );
+    final opts = ImageCompressorOptions(targetSizeInKB: _targetKB);
     final Stopwatch sw = Stopwatch()..start();
     final res = await ImageCompressorService.compressToTarget(_originalFile!, options: opts);
     sw.stop();
