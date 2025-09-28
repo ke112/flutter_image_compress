@@ -75,7 +75,7 @@ class _MyHomePageState extends State<MyHomePage> {
                     child: ElevatedButton.icon(
                       onPressed: _state.pickImage,
                       icon: const Icon(Icons.photo_library, size: 12),
-                      label: const Text('选择图片', style: TextStyle(fontSize: 12)),
+                      label: const Text('选择图片', style: TextStyle(fontSize: 11)),
                     ),
                   ),
                   const SizedBox(width: 12),
@@ -84,7 +84,7 @@ class _MyHomePageState extends State<MyHomePage> {
                     child: ElevatedButton.icon(
                       onPressed: _state.captureImage,
                       icon: const Icon(Icons.photo_camera, size: 12),
-                      label: const Text('拍照', style: TextStyle(fontSize: 12)),
+                      label: const Text('拍照', style: TextStyle(fontSize: 11)),
                     ),
                   ),
                   const SizedBox(width: 12),
@@ -93,7 +93,7 @@ class _MyHomePageState extends State<MyHomePage> {
                     child: ElevatedButton.icon(
                       onPressed: _state.originalFile != null ? _state.compress : null,
                       icon: const Icon(Icons.compress, size: 12),
-                      label: const Text('压缩到目标', style: TextStyle(fontSize: 12)),
+                      label: const Text('压缩到目标', style: TextStyle(fontSize: 10)),
                     ),
                   ),
                 ],
